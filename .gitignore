@@ -8,4 +8,7 @@ __pycache__/
 *.pem
 *.crt
 users
+# Backups and their keys
+*.age
+backup-key*.txt
 .env

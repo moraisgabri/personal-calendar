@@ -61,9 +61,29 @@ refused. Standard library only, so it can be copied to any qube:
     python3 src/personal_calendar/sync_check.py https://<address>:5232/ \
         --user owner --certificate server.crt
 
+## Backup
+
+Turns the whole Calendar into one encrypted Backup, named by when it was
+taken, and restores one. It encrypts with `age`, so `backup` needs only the
+public key; `restore` needs the private key. Standard library only, plus the
+`age` package from the template (`sudo dnf install age`):
+
+    age-keygen -o backup-key.txt     # prints the public key, age1...
+    python3 src/personal_calendar/backup.py backup /home/user/radicale/collections \
+        /backups --recipient age1...
+    python3 src/personal_calendar/backup.py restore /backups/calendar-20261005T120000Z.age \
+        /home/user/restored --identity backup-key.txt
+
+`restore` checks the whole Backup before writing anything: a wrong key or a
+damaged Backup fails and leaves the folder untouched. It refuses a folder that
+isn't empty unless given `--force`, which replaces what the folder holds.
+A `backup` that can't be taken exits non-zero with `FAIL backup: ...` and
+leaves no file behind.
+
 ## Development
 
     sudo dnf install nss-tools     # certutil, for Thunderbird's tests
+    sudo dnf install age           # for the Backup tests
     python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
     .venv/bin/mypy
     .venv/bin/pytest
