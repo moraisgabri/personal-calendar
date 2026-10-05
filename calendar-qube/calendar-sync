@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# Sync the Calendar Qube's local copy with the Calendar Server. Run by
+# calendar-sync.timer; the Owner can also run it by hand.
+#
+#   calendar-sync                 Sync. A conflict is reported, not resolved.
+#   calendar-sync --keep local    Sync, resolving conflicts with this qube's version.
+#   calendar-sync --keep server   Sync, resolving conflicts with the Calendar Server's.
+#
+# An unreachable Calendar Server (away from home, desktop off) is only logged:
+# khal keeps working on the local copy and the next Sync sends the edits.
+
+set -uo pipefail
+
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/vdirsyncer/config"
+
+case "${1:-}" in
+  "") ;;
+  --keep)
+    case "${2:-}" in
+      local) winner="a wins" ;;
+      server) winner="b wins" ;;
+      *) echo "Use --keep local or --keep server." >&2; exit 2 ;;
+    esac
+    resolving=$(mktemp)
+    trap 'rm -f "$resolving"' EXIT
+    sed "/^\[pair calendar\]$/a conflict_resolution = \"$winner\"" "$CONFIG" > "$resolving"
+    CONFIG=$resolving
+    ;;
+  *) echo "Usage: calendar-sync [--keep local|server]" >&2; exit 2 ;;
+esac
+
+output=$(VDIRSYNCER_CONFIG="$CONFIG" vdirsyncer sync 2>&1)
+status=$?
+printf '%s\n' "$output"
+
+if grep -q "One item changed on both sides" <<<"$output"; then
+  message="An event was edited on two Devices. Run 'calendar-sync --keep local' or 'calendar-sync --keep server' in this qube."
+  echo "$message" >&2
+  command -v notify-send >/dev/null &&
+    notify-send --urgency=critical "Calendar conflict" "$message" 2>/dev/null
+fi
+exit "$status"
