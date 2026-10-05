@@ -1,7 +1,7 @@
 # Personal Calendar
 
 A self-hosted Calendar Server (Radicale) on the Qubes desktop that every
-Device Syncs with. See `.scratch/personal-calendar/spec.md` and `GLOSSARY.md`.
+Device Syncs with. See the spec in [issue #1](https://github.com/moraisgabri/personal-calendar/issues/1) and `GLOSSARY.md`.
 
 ## Set up the Calendar Server
 
