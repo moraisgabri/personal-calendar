@@ -42,11 +42,18 @@ def backup(calendar: Path, backups: Path, recipient: str) -> Path:
             raise BackupFailed(f"{folder} is not a folder")
     taken = datetime.now(timezone.utc)
     destination = backups / taken.strftime("calendar-%Y%m%dT%H%M%SZ.age")
-    encrypted = subprocess.run(
-        ["age", "--encrypt", "--recipient", recipient, "--output", str(destination)],
-        input=pack(calendar),
-        capture_output=True,
-    )
+    # age --output would silently replace a Backup taken in the same second.
+    try:
+        output = destination.open("xb")
+    except FileExistsError:
+        raise BackupFailed(f"{destination} is already there; not replacing it")
+    with output:
+        encrypted = subprocess.run(
+            ["age", "--encrypt", "--recipient", recipient],
+            input=pack(calendar),
+            stdout=output,
+            stderr=subprocess.PIPE,
+        )
     if encrypted.returncode != 0:
         destination.unlink(missing_ok=True)
         raise BackupFailed(encrypted.stderr.decode().strip())
@@ -63,12 +70,18 @@ def restore(backup_file: Path, destination: Path, identity: Path,
         ["age", "--decrypt", "--identity", str(identity), str(backup_file)],
         capture_output=True,
     )
-    if b"no identity matched" in decrypted.stderr:
-        raise RestoreFailed(f"{backup_file} was not made for this key ({identity})")
+    error = decrypted.stderr.decode().strip()
+    if f'reading "{identity}"' in error:
+        raise RestoreFailed(f"cannot use the key {identity}: {error}")
+    # age can't tell a wrong key from a damaged header, so neither can we.
+    if "no identity matched" in error:
+        raise RestoreFailed(
+            f"{backup_file} was not made for this key ({identity}), or it is damaged"
+        )
     # age may print the readable start of a damaged Backup before it fails,
     # so nothing is used unless the whole Backup decrypted.
     if decrypted.returncode != 0:
-        raise RestoreFailed(f"{backup_file} is damaged: {decrypted.stderr.decode().strip()}")
+        raise RestoreFailed(f"{backup_file} is damaged: {error}")
     archive = decrypted.stdout
     # Only now, with the whole Backup in hand, is it safe to clear the folder.
     if destination.exists():

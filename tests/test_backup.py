@@ -4,7 +4,7 @@ Calendars laid out the way the Calendar Server stores them."""
 import subprocess
 import sys
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -152,7 +152,13 @@ def tamper(backup: Path) -> None:
     backup.write_bytes(bytes(data))
 
 
-@pytest.mark.parametrize("damage", [truncate, tamper])
+def tamper_with_header(backup: Path) -> None:
+    data = bytearray(backup.read_bytes())
+    data[60] ^= 0x01
+    backup.write_bytes(bytes(data))
+
+
+@pytest.mark.parametrize("damage", [truncate, tamper, tamper_with_header])
 def test_a_damaged_backup_is_rejected_and_nothing_is_written(
     damage: Callable[[Path], None],
     calendar: Path,
@@ -171,6 +177,37 @@ def test_a_damaged_backup_is_rejected_and_nothing_is_written(
 
     assert result.returncode != 0
     assert "damaged" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not restored.exists()
+
+
+def missing_key(tmp_path: Path, public_key: str) -> Path:
+    return tmp_path / "no-such-key.txt"
+
+
+def public_key_instead(tmp_path: Path, public_key: str) -> Path:
+    key = tmp_path / "public-key.txt"
+    key.write_text(public_key + "\n")
+    return key
+
+
+@pytest.mark.parametrize("bad_key", [missing_key, public_key_instead])
+def test_restore_with_an_unusable_key_file_blames_the_key_not_the_backup(
+    bad_key: Callable[[Path, str], Path],
+    calendar: Path,
+    keypair: tuple[str, Path],
+    tmp_path: Path,
+) -> None:
+    public_key, _ = keypair
+    backup = take_backup(calendar, public_key, tmp_path)
+    key = bad_key(tmp_path, public_key)
+    restored = tmp_path / "restored"
+
+    result = run("restore", backup, restored, "--identity", key)
+
+    assert result.returncode != 0
+    assert "cannot use the key" in result.stderr
+    assert "damaged" not in result.stderr
     assert "Traceback" not in result.stderr
     assert not restored.exists()
 
@@ -248,3 +285,23 @@ def test_restore_refuses_a_destination_that_is_a_file(
     assert "not a folder" in result.stderr
     assert "Traceback" not in result.stderr
     assert restored.read_text() == "already here"
+
+
+def test_backup_never_replaces_a_backup_already_there(
+    calendar: Path, keypair: tuple[str, Path], tmp_path: Path
+) -> None:
+    public_key, _ = keypair
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    # A Backup already under every name this run could pick.
+    now = datetime.now(timezone.utc)
+    for second in range(-1, 10):
+        name = (now + timedelta(seconds=second)).strftime("calendar-%Y%m%dT%H%M%SZ.age")
+        (backups / name).write_text("an earlier Backup")
+
+    result = run("backup", calendar, backups, "--recipient", public_key)
+
+    assert result.returncode != 0
+    assert "already" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert {path.read_text() for path in backups.iterdir()} == {"an earlier Backup"}

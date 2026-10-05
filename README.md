@@ -78,7 +78,7 @@ public key; `restore` needs the private key. Standard library only, plus the
 damaged Backup fails and leaves the folder untouched. It refuses a folder that
 isn't empty unless given `--force`, which replaces what the folder holds.
 A `backup` that can't be taken exits non-zero with `FAIL backup: ...` and
-leaves no file behind.
+leaves no file behind; it never replaces a Backup already there.
 
 ## Development
 
