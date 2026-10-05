@@ -8,7 +8,11 @@ Wants=network-online.target
 
 [Service]
 User=user
-ExecStart=/home/user/radicale/venv/bin/radicale --config /home/user/radicale/radicale.conf
+# SELinux forbids systemd to execute anything under /home (user_home_t),
+# including the venv's python symlink. So execute /usr/bin/python3 (bin_t)
+# and pass the venv's python path as argv[0] ("@"): Python finds the venv
+# from argv[0] and loads Radicale from it.
+ExecStart=@/usr/bin/python3 /home/user/radicale/venv/bin/python -m radicale --config /home/user/radicale/radicale.conf
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
