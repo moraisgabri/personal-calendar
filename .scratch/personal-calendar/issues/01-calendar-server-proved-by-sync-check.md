@@ -9,13 +9,13 @@
 Human-only steps: the Owner creates the qubes in dom0 and allows qube-to-qube traffic. The agent provides a guided procedure (`/wizard`) for these.
 
 - [ ] The Calendar Server starts automatically when the `calendar-server` qube starts
-- [ ] It serves HTTPS only; a plain HTTP request is refused, not served
-- [ ] Requests without the correct password are refused
-- [ ] The Calendar is stored as plain files inside the `calendar-server` qube
-- [ ] The Sync check takes the Calendar Server's address and credentials, and runs create → read → delete on a uniquely named test event
-- [ ] The Sync check also verifies that a wrong password and plain HTTP are refused
-- [ ] The Sync check always attempts to clean up its test event, even when a step fails
-- [ ] On failure, the Sync check exits non-zero and names the step that failed
+- [x] It serves HTTPS only; a plain HTTP request is refused, not served
+- [x] Requests without the correct password are refused
+- [x] The Calendar is stored as plain files inside the `calendar-server` qube
+- [x] The Sync check takes the Calendar Server's address and credentials, and runs create → read → delete on a uniquely named test event
+- [x] The Sync check also verifies that a wrong password and plain HTTP are refused
+- [x] The Sync check always attempts to clean up its test event, even when a step fails
+- [x] On failure, the Sync check exits non-zero and names the step that failed
 - [ ] The Sync check passes from another qube on the desktop
-- [ ] No password, private key or certificate key is committed to the repo
-- [ ] A guided procedure covers the dom0 steps
+- [x] No password, private key or certificate key is committed to the repo
+- [x] A guided procedure covers the dom0 steps

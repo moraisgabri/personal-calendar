@@ -1,0 +1,20 @@
+# The Calendar Server. Installed into /etc/systemd/system on every boot of the
+# `calendar-server` qube by /rw/config/rc.local (see install.sh), because the
+# root filesystem of a Qubes AppVM does not persist.
+[Unit]
+Description=Calendar Server (Radicale)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=user
+ExecStart=/home/user/radicale/venv/bin/radicale --config /home/user/radicale/radicale.conf
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/user/radicale/collections
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

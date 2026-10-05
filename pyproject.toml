@@ -1,0 +1,22 @@
+[project]
+name = "personal-calendar"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["radicale[bcrypt]", "cryptography", "pytest", "mypy"]
+
+[project.scripts]
+sync-check = "personal_calendar.sync_check:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests", "calendar-server"]
