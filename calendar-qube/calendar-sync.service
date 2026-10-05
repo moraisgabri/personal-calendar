@@ -1,0 +1,9 @@
+# Sync the Calendar Qube with the Calendar Server. A user unit: it runs as
+# unconfined_t, so SELinux lets it execute the tools under /home.
+[Unit]
+Description=Sync the Calendar with the Calendar Server
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/share/calendar/venv/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/calendar-sync

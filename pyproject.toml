@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["radicale[bcrypt]", "cryptography", "pytest", "mypy"]
+dev = ["radicale[bcrypt]", "cryptography", "vdirsyncer", "khal", "pytest", "mypy"]
 
 [project.scripts]
 sync-check = "personal_calendar.sync_check:main"
