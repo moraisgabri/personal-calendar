@@ -91,13 +91,20 @@ sudo chmod 755 "$hook"
 sudo "$hook"
 
 echo "== Waiting for the Calendar Server"
+up=false
 for _ in $(seq 50); do
   if curl --silent --output /dev/null --cacert "$BASE/secrets/server.crt" \
       "https://calendar-server:$PORT/" --resolve "calendar-server:$PORT:127.0.0.1"; then
+    up=true
     break
   fi
   sleep 0.2
 done
+if ! $up; then
+  echo "The Calendar Server did not start. Its log:" >&2
+  sudo journalctl -b -u radicale.service --no-pager -n 20 >&2
+  exit 1
+fi
 
 echo "== Creating the Calendar (if it does not exist yet)"
 read -rsp "The Owner's Calendar password: " password; echo
