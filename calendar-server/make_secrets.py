@@ -47,7 +47,8 @@ def write_certificate(directory: Path, names: list[str]) -> None:
         .not_valid_before(now - datetime.timedelta(days=1))
         .not_valid_after(now + CERTIFICATE_LIFETIME)
         .add_extension(subject_alternative_name(names), critical=False)
-        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        # Not a CA: Thunderbird refuses a CA certificate as a server's own.
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .sign(key, hashes.SHA256())
     )
     write_private(
