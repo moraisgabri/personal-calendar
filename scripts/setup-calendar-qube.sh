@@ -194,9 +194,189 @@ cd "$REPO"
 THIS_QUBE=$(qubesdb-read /name 2>/dev/null || hostname)
 QUBE=calendar
 
-TOTAL_STAGES=6
+# copy_install_files copies the repo's calendar-qube/ folder into the qube.
+copy_install_files() {
+  say "This copies the repo's calendar-qube/ folder (no secrets in it)."
+  note "If $QUBE has an older copy, remove it first: in $QUBE, rm -rf ~/QubesIncoming/$THIS_QUBE/calendar-qube"
+  say "A dom0 dialog will ask for the target qube: choose $QUBE."
+  if confirm "Run qvm-copy now?"; then
+    qvm-copy "$REPO/calendar-qube"
+  else
+    SKIPPED+=("copy calendar-qube/ into $QUBE (qvm-copy)")
+  fi
+}
 
-banner "Desktop Calendar Qube (issue #5)"
+# certificate_stage makes sure the Calendar Server's certificate is one
+# Thunderbird accepts. Calendar Servers set up before Thunderbird was added
+# have a CA certificate, which Thunderbird refuses as a server's own.
+certificate_stage() {
+  stage "calendar-server: a certificate Thunderbird accepts"
+  say "In a calendar-server terminal, run:"
+  step "openssl x509 -in ~/radicale/secrets/server.crt -noout -ext basicConstraints,subjectAltName"
+  if ! confirm "Does it say CA:TRUE?"; then
+    say "It is already one Thunderbird accepts."
+    return
+  fi
+  say "Thunderbird would refuse it, so re-make it. First copy the newer install files."
+  note "If calendar-server has an older copy, remove it first: in calendar-server, rm -rf ~/QubesIncoming/$THIS_QUBE/calendar-server"
+  say "A dom0 dialog will ask for the target qube: choose calendar-server."
+  if confirm "Run qvm-copy now?"; then
+    qvm-copy "$REPO/calendar-server"
+  else
+    SKIPPED+=("copy calendar-server/ into the calendar-server qube (qvm-copy)")
+  fi
+  say "Then, in calendar-server, give every IP Address the openssl command listed:"
+  step "bash ~/QubesIncoming/$THIS_QUBE/calendar-server/install.sh --name $CALENDAR_SERVER_IP --renew-certificate"
+  note "Add one more --name for each other IP Address it listed. The DNS name"
+  note "calendar-server is added on its own. The password is kept; it asks for"
+  note "it once, to check the Calendar exists."
+  pause "Press Enter once it printed 'Done.'"
+  [[ "$ALREADY_SET_UP" == yes ]] || return 0
+  say "$QUBE still trusts the old certificate. In a $QUBE terminal, remove the old copy:"
+  step "rm -f ~/QubesIncoming/calendar-server/server.crt"
+  say "In the calendar-server terminal, run this and choose $QUBE:"
+  step "qvm-copy ~/radicale/secrets/server.crt"
+  say "Then, in $QUBE:"
+  step "install -m 644 ~/QubesIncoming/calendar-server/server.crt ~/.config/vdirsyncer/server.crt && calendar-sync && echo SYNC OK"
+  note "Every other Device that already trusts the Calendar Server, e.g. the phone, needs the new certificate too."
+  pause "Press Enter once it printed SYNC OK."
+}
+
+# khal_stages create the Calendar Qube with khal, Synced by vdirsyncer.
+khal_stages() {
+  stage "dom0: create the Calendar Qube"
+  say "In a dom0 terminal, run:"
+  step "qvm-create --class AppVM --label purple $QUBE"
+  step "qvm-start $QUBE"
+  step "qvm-prefs $QUBE ip"
+  note "It keeps internet access until the install is done (a later stage locks it down)."
+  note "The qube uses your default template; it must be Fedora-based (check: qvm-prefs $QUBE template)."
+  ask CALENDAR_QUBE_IP "Paste the IP that the last command printed:"
+  write_env CALENDAR_QUBE_IP "$CALENDAR_QUBE_IP"
+
+  stage "sys-firewall: allow $QUBE to reach the Calendar Server"
+  say "Open a terminal in sys-firewall (dom0: qvm-run sys-firewall xterm) and run:"
+  rule="nft add rule ip qubes custom-forward ip saddr $CALENDAR_QUBE_IP ip daddr $CALENDAR_SERVER_IP tcp dport 5232 ct state new accept"
+  step "grep -qxF '$rule' /rw/config/qubes-firewall-user-script || echo '$rule' | sudo tee -a /rw/config/qubes-firewall-user-script"
+  step "sudo chmod +x /rw/config/qubes-firewall-user-script"
+  step "sudo $rule"
+  note "The first two lines make the rule survive restarts; the last applies it now."
+  pause "Press Enter once all three commands ran without errors."
+
+  stage "Copy the install files and the certificate into $QUBE"
+  copy_install_files
+  say "Now the certificate. In a calendar-server terminal, run this and choose $QUBE:"
+  step "qvm-copy ~/radicale/secrets/server.crt"
+  pause "Press Enter once copied."
+
+  stage "$QUBE: install the Calendar"
+  say "Open a terminal in $QUBE (dom0: qvm-run $QUBE xterm) and run:"
+  step "bash ~/QubesIncoming/$THIS_QUBE/calendar-qube/install.sh --server https://$CALENDAR_SERVER_IP:5232/ --certificate ~/QubesIncoming/calendar-server/server.crt"
+  note "It asks for the Owner's Calendar password (from your password manager)"
+  note "and saves it in $QUBE, readable only by you there."
+  pause "Press Enter once it printed 'Done.'"
+
+  stage "dom0: let $QUBE reach only the Calendar Server"
+  say "In dom0, run:"
+  step "qvm-firewall $QUBE reset"
+  step "qvm-firewall $QUBE del accept"
+  step "qvm-firewall $QUBE add accept dsthost=$CALENDAR_SERVER_IP proto=tcp dstports=5232"
+  step "qvm-firewall $QUBE add drop"
+  step "qvm-firewall $QUBE list"
+  note "The list must show exactly two rules: accept to $CALENDAR_SERVER_IP port 5232, then drop."
+  note "To update khal or vdirsyncer later, open it up again with: qvm-firewall $QUBE reset"
+  pause "Press Enter once the list looks like that."
+
+  stage "$QUBE: check the Calendar"
+  say "In the $QUBE terminal, run each line:"
+  step "calendar-sync && echo SYNC OK"
+  step "curl --max-time 5 -sS https://example.org >/dev/null && echo 'INTERNET OPEN (wrong)' || echo 'internet blocked (right)'"
+  step "khal new 2030-01-01 10:00 11:00 'Calendar Qube test' && calendar-sync && khal list 2030-01-01 1d"
+  step "systemctl --user list-timers calendar-sync.timer"
+  note "Expect: SYNC OK, internet blocked, the test event listed, and the timer scheduled."
+  pause "Press Enter once all four checks looked right."
+  say "Remove the test event, here and on the Calendar Server:"
+  step "rm \$(grep -l 'Calendar Qube test' ~/.local/share/calendar/events/*.ics) && vdirsyncer sync --force-delete calendar && khal list 2030-01-01 1d"
+  note "--force-delete is needed only because the test event was the Calendar's"
+  note "only event: vdirsyncer won't empty the Calendar Server on its own."
+  note "Expect the test event to be gone from the list."
+  pause "Press Enter once it is gone."
+  say "Prove the Sync timer starts by itself. In dom0, run:"
+  step "qvm-shutdown --wait $QUBE && qvm-start $QUBE"
+  say "Then, after a minute, in a new $QUBE terminal:"
+  step "systemctl --user list-timers calendar-sync.timer"
+  pause "Press Enter once it shows a recent LAST run."
+}
+
+# thunderbird_stages add the Calendar to Thunderbird in the Calendar Qube.
+# Thunderbird talks to the Calendar Server itself, through the same firewall
+# rule as vdirsyncer.
+thunderbird_stages() {
+  stage "Template: install Thunderbird"
+  say "In dom0, find $QUBE's template:"
+  step "qvm-prefs $QUBE template"
+  say "Open a terminal in that template (dom0: qvm-run <template> xterm) and run:"
+  step "sudo dnf install -y thunderbird nss-tools"
+  note "nss-tools provides certutil, which puts the Calendar Server's certificate into Thunderbird."
+  say "Then, in dom0, shut the template down and restart $QUBE so it sees the new programs:"
+  step "qvm-shutdown --wait <template> && qvm-shutdown --wait $QUBE && qvm-start $QUBE"
+  pause "Press Enter once $QUBE is running again."
+
+  if [[ "$ALREADY_SET_UP" == yes ]]; then
+    stage "Copy the install files into $QUBE"
+    copy_install_files
+  fi
+
+  stage "$QUBE: add the Calendar to Thunderbird"
+  say "In a $QUBE terminal, start Thunderbird once so it makes its profile:"
+  step "thunderbird"
+  note "Close the account setup it offers (no email account is needed), then quit Thunderbird."
+  say "Then run:"
+  step "bash ~/QubesIncoming/$THIS_QUBE/calendar-qube/install-thunderbird.sh --server https://$CALENDAR_SERVER_IP:5232/ --certificate ~/.config/vdirsyncer/server.crt"
+  say "Start Thunderbird again and open its Calendar tab. It asks for the Owner's"
+  say "Calendar password (from your password manager): tick the box to remember it."
+  note "There must be no certificate warning. If there is one, stop: the certificate is wrong."
+  pause "Press Enter once Thunderbird shows the Calendar."
+
+  stage "$QUBE: check Thunderbird"
+  say "1. In Thunderbird, create an event on 2030-01-02 titled 'Thunderbird test'. Then, in a $QUBE terminal:"
+  step "calendar-sync && khal list 2030-01-02 1d"
+  say "2. Now the reverse:"
+  step "khal new 2030-01-02 12:00 13:00 'khal test' && calendar-sync"
+  note "   In Thunderbird, right-click the Calendar and choose Synchronize Calendars: 'khal test' appears."
+  say "3. In dom0, check the firewall did not change:"
+  step "qvm-firewall $QUBE list"
+  note "   Still exactly two rules: accept to $CALENDAR_SERVER_IP port 5232, then drop."
+  pause "Press Enter once all three looked right."
+  say "4. Stop the Calendar Server, in a calendar-server terminal:"
+  step "sudo systemctl stop radicale.service"
+  say "   Quit and restart Thunderbird, then Synchronize Calendars: the Calendar is"
+  say "   still there, read from Thunderbird's own copy."
+  say "   Now choose File > Offline > Work Offline, and rename 'Thunderbird test'"
+  say "   to 'Thunderbird offline edit'."
+  say "   Start the Calendar Server again:"
+  step "sudo systemctl start radicale.service"
+  say "   In Thunderbird, choose File > Offline > Work Online, then Synchronize Calendars. In $QUBE:"
+  step "calendar-sync && khal list 2030-01-02 1d"
+  note "   Expect 'Thunderbird offline edit' and 'khal test'."
+  pause "Press Enter once the offline edit reached khal."
+  say "Remove both test events: delete them in Thunderbird, then in $QUBE:"
+  step "calendar-sync && khal list 2030-01-02 1d"
+  note "If they were the Calendar's only events, calendar-sync refuses to empty the"
+  note "local copy; run  vdirsyncer sync --force-delete calendar  instead."
+  pause "Press Enter once the list is empty."
+}
+
+ALREADY_SET_UP=no
+printf '\n%s  Desktop Calendar Qube with khal and Thunderbird%s\n\n' "$BOLD" "$RESET"
+if confirm "Is $QUBE already set up with khal (from an earlier run of this wizard)?"; then
+  ALREADY_SET_UP=yes
+  TOTAL_STAGES=5
+else
+  TOTAL_STAGES=10
+fi
+
+banner "Desktop Calendar Qube with khal and Thunderbird (issues #5, #11)"
 
 CALENDAR_SERVER_IP=$(_existing CALENDAR_SERVER_IP || true)
 if [[ -z "$CALENDAR_SERVER_IP" ]]; then
@@ -206,73 +386,8 @@ if [[ -z "$CALENDAR_SERVER_IP" ]]; then
   write_env CALENDAR_SERVER_IP "$CALENDAR_SERVER_IP"
 fi
 
-stage "dom0: create the Calendar Qube"
-say "In a dom0 terminal, run:"
-step "qvm-create --class AppVM --label purple $QUBE"
-step "qvm-start $QUBE"
-step "qvm-prefs $QUBE ip"
-note "It keeps internet access until the install is done (stage 5 locks it down)."
-note "The qube uses your default template; it must be Fedora-based (check: qvm-prefs $QUBE template)."
-ask CALENDAR_QUBE_IP "Paste the IP that the last command printed:"
-write_env CALENDAR_QUBE_IP "$CALENDAR_QUBE_IP"
-
-stage "sys-firewall: allow $QUBE to reach the Calendar Server"
-say "Open a terminal in sys-firewall (dom0: qvm-run sys-firewall xterm) and run:"
-rule="nft add rule ip qubes custom-forward ip saddr $CALENDAR_QUBE_IP ip daddr $CALENDAR_SERVER_IP tcp dport 5232 ct state new accept"
-step "grep -qxF '$rule' /rw/config/qubes-firewall-user-script || echo '$rule' | sudo tee -a /rw/config/qubes-firewall-user-script"
-step "sudo chmod +x /rw/config/qubes-firewall-user-script"
-step "sudo $rule"
-note "The first two lines make the rule survive restarts; the last applies it now."
-pause "Press Enter once all three commands ran without errors."
-
-stage "Copy the install files and the certificate into $QUBE"
-say "This copies the repo's calendar-qube/ folder (no secrets in it)."
-say "A dom0 dialog will ask for the target qube: choose $QUBE."
-if confirm "Run qvm-copy now?"; then
-  qvm-copy "$REPO/calendar-qube"
-else
-  SKIPPED+=("copy calendar-qube/ into $QUBE (qvm-copy)")
-fi
-say "Now the certificate. In a calendar-server terminal, run this and choose $QUBE:"
-step "qvm-copy ~/radicale/secrets/server.crt"
-pause "Press Enter once copied."
-
-stage "$QUBE: install the Calendar"
-say "Open a terminal in $QUBE (dom0: qvm-run $QUBE xterm) and run:"
-step "bash ~/QubesIncoming/$THIS_QUBE/calendar-qube/install.sh --server https://$CALENDAR_SERVER_IP:5232/ --certificate ~/QubesIncoming/calendar-server/server.crt"
-note "It asks for the Owner's Calendar password (from your password manager)"
-note "and saves it in $QUBE, readable only by you there."
-pause "Press Enter once it printed 'Done.'"
-
-stage "dom0: let $QUBE reach only the Calendar Server"
-say "In dom0, run:"
-step "qvm-firewall $QUBE reset"
-step "qvm-firewall $QUBE del accept"
-step "qvm-firewall $QUBE add accept dsthost=$CALENDAR_SERVER_IP proto=tcp dstports=5232"
-step "qvm-firewall $QUBE add drop"
-step "qvm-firewall $QUBE list"
-note "The list must show exactly two rules: accept to $CALENDAR_SERVER_IP port 5232, then drop."
-note "To update khal or vdirsyncer later, open it up again with: qvm-firewall $QUBE reset"
-pause "Press Enter once the list looks like that."
-
-stage "$QUBE: check the Calendar"
-say "In the $QUBE terminal, run each line:"
-step "calendar-sync && echo SYNC OK"
-step "curl --max-time 5 -sS https://example.org >/dev/null && echo 'INTERNET OPEN (wrong)' || echo 'internet blocked (right)'"
-step "khal new 2030-01-01 10:00 11:00 'Calendar Qube test' && calendar-sync && khal list 2030-01-01 1d"
-step "systemctl --user list-timers calendar-sync.timer"
-note "Expect: SYNC OK, internet blocked, the test event listed, and the timer scheduled."
-pause "Press Enter once all four checks looked right."
-say "Remove the test event, here and on the Calendar Server:"
-step "rm \$(grep -l 'Calendar Qube test' ~/.local/share/calendar/events/*.ics) && vdirsyncer sync --force-delete calendar && khal list 2030-01-01 1d"
-note "--force-delete is needed only because the test event was the Calendar's"
-note "only event: vdirsyncer won't empty the Calendar Server on its own."
-note "Expect the test event to be gone from the list."
-pause "Press Enter once it is gone."
-say "Prove the Sync timer starts by itself. In dom0, run:"
-step "qvm-shutdown --wait $QUBE && qvm-start $QUBE"
-say "Then, after a minute, in a new $QUBE terminal:"
-step "systemctl --user list-timers calendar-sync.timer"
-pause "Press Enter once it shows a recent LAST run."
+certificate_stage
+[[ "$ALREADY_SET_UP" == yes ]] || khal_stages
+thunderbird_stages
 
 finish
