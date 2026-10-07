@@ -287,24 +287,43 @@ write_env LAN_PREFIX "$LAN_PREFIX"
 write_env LAN_GATEWAY "$LAN_GATEWAY"
 write_env LAN_DNS "$LAN_DNS"
 
-stage "Router: find the DHCP range and pick the desktop's fixed address"
-say "Open the router's admin page in a browser in any qube:"
-step "http://$LAN_GATEWAY/"
-note "Log in with the router's admin password (often printed on the router)."
-say "Find the DHCP server settings, usually under LAN, Local Network or DHCP."
-say "Note the first and last address it hands out (the pool or range)."
-ask_ip DHCP_FIRST "First address of the DHCP range:"
-ask_ip DHCP_LAST "Last address of the DHCP range:"
-write_env DHCP_FIRST "$DHCP_FIRST"
-write_env DHCP_LAST "$DHCP_LAST"
+stage "Pick the desktop's fixed address"
+say "The fixed address must not be one the router hands out to other devices."
+say "Reading the router's DHCP range tells you which ones those are. That's only"
+say "reading: nothing on the router changes. Without the admin page, the wizard"
+say "suggests a high address instead and checks that no device is using it."
+ROUTER_PAGE=no
+if confirm "Will you open the router's admin page to read the DHCP range?"; then
+  ROUTER_PAGE=yes
+  say "Open the router's admin page in a browser in any qube:"
+  step "http://$LAN_GATEWAY/"
+  note "Log in with the router's admin password (often printed on the router)."
+  say "Find the DHCP server settings, usually under LAN, Local Network or DHCP."
+  say "Note the first and last address it hands out (the pool or range). Change nothing."
+  ask_ip DHCP_FIRST "First address of the DHCP range:"
+  ask_ip DHCP_LAST "Last address of the DHCP range:"
+  write_env DHCP_FIRST "$DHCP_FIRST"
+  write_env DHCP_LAST "$DHCP_LAST"
+else
+  warn "Without the DHCP range, the router might someday hand the chosen address"
+  warn "to another device. Then one of the two loses its connection now and then."
+  warn "Many routers hand out .100 to .199; a few hand out the whole network."
+fi
+write_env ROUTER_PAGE "$ROUTER_PAGE"
 planned=$(_existing HOME_NETWORK_IP || true)
 [[ -n "$planned" ]] && note "setup-calendar-server.sh recorded $planned as the planned address."
-say "Choose the desktop's fixed address: on $LAN_GATEWAY/$LAN_PREFIX's network,"
-say "outside $DHCP_FIRST to $DHCP_LAST, and not the router's own address."
+if [[ "$ROUTER_PAGE" == yes ]]; then
+  say "Choose the desktop's fixed address: on $LAN_GATEWAY/$LAN_PREFIX's network,"
+  say "outside $DHCP_FIRST to $DHCP_LAST, and not the router's own address."
+elif ((LAN_PREFIX <= 24)); then
+  mask=$(((0xFFFFFFFF << (32 - LAN_PREFIX)) & 0xFFFFFFFF))
+  base=$(($(ip_number "$LAN_GATEWAY") & mask))
+  say "Suggested: $(((base >> 24) & 255)).$(((base >> 16) & 255)).$(((base >> 8) & 255)).250 (high, so usually outside the DHCP range)."
+fi
 while true; do
   ask_ip DESKTOP_LAN_IP "The desktop's fixed Home Network address:"
   n=$(ip_number "$DESKTOP_LAN_IP")
-  if ((n >= $(ip_number "$DHCP_FIRST") && n <= $(ip_number "$DHCP_LAST"))); then
+  if [[ "$ROUTER_PAGE" == yes ]] && ((n >= $(ip_number "$DHCP_FIRST") && n <= $(ip_number "$DHCP_LAST"))); then
     warn "$DESKTOP_LAN_IP is inside the DHCP range: the router could hand it to another device."
   elif [[ "$DESKTOP_LAN_IP" == "$LAN_GATEWAY" ]]; then
     warn "That is the router's own address."
@@ -315,21 +334,32 @@ while true; do
   fi
 done
 write_env DESKTOP_LAN_IP "$DESKTOP_LAN_IP"
-say "Check nothing on the Home Network uses it already. In sys-net:"
-step "ping -c 3 -W 1 $DESKTOP_LAN_IP"
-note "Expect 100% packet loss. If something answers, re-run and choose another address."
+say "Check that nothing on the Home Network uses it already. In sys-net:"
+step "sudo arping -D -c 3 -I $SYS_NET_INTERFACE $DESKTOP_LAN_IP; echo \"exit \$?\""
+note "Expect 'Received 0 response(s)' and 'exit 0'. Every device answers arping,"
+note "even one whose firewall ignores ping. If something answers, choose another."
+note "If arping is missing: ping -c 3 -W 1 $DESKTOP_LAN_IP must show 100% packet loss."
 pause "Press Enter once nothing answered."
 
 stage "Router: nothing forwarded from the internet"
-say "Still in the router's admin page, check each of these:"
-step "Port forwarding / Virtual servers / NAT rules: none points at $DESKTOP_LAN_IP,"
-step "  at the desktop's current DHCP address, or at port $PORT. Delete any you find."
-step "DMZ / Exposed host: off."
-step "UPnP / NAT-PMP: off (it lets software on the Home Network open ports itself)."
-step "IPv6 firewall, if the router has IPv6: inbound connections blocked (the default)."
+if [[ "$ROUTER_PAGE" == yes ]]; then
+  say "Still in the router's admin page, look at each of these:"
+  step "Port forwarding / Virtual servers / NAT rules: none points at $DESKTOP_LAN_IP,"
+  step "  at the desktop's current DHCP address, or at port $PORT."
+  step "DMZ / Exposed host: off."
+  step "UPnP / NAT-PMP: off (it lets software on the Home Network open ports itself)."
+  step "IPv6 firewall, if the router has IPv6: inbound connections blocked (the default)."
+  note "With dual WAN, the rules may be listed per WAN: look at each one."
+  note "Only if a rule points at the desktop does the router need a change: delete that rule."
+else
+  say "Skipped: you're not opening the router's admin page."
+  say "Later, the 'Laptop: nothing else is reachable' stage tests from the internet"
+  say "whether anything reaches the desktop, once for each internet connection."
+  note "If you've never set up port forwarding, DMZ or an exposed host, there is none."
+fi
 note "The router needs no change for the Calendar Server: the Home Network already"
-note "reaches the desktop directly."
-pause "Press Enter once the router forwards nothing to the desktop."
+note "reaches the desktop directly, and that traffic never goes out to the internet."
+pause "Press Enter to continue."
 
 stage "sys-net: give the desktop its fixed address"
 say "In the sys-net terminal, run:"
@@ -441,12 +471,30 @@ stage "Laptop: nothing else is reachable"
 say "In the same laptop qube, try other ports on the desktop:"
 step "for p in 22 80 443 631 8080 $PORT; do timeout 3 bash -c \"</dev/tcp/$DESKTOP_LAN_IP/\$p\" 2>/dev/null && echo \"\$p OPEN\" || echo \"\$p closed\"; done"
 note "Expect every port closed except '$PORT OPEN'."
-say "From the internet: on the phone, turn Wi-Fi off (mobile data only). Find the"
-say "home's public address on the router's status page (or: curl -s https://api.ipify.org"
-say "in a desktop qube) and open https://<public address>:$PORT/ in the phone's browser."
-note "Expect it to time out or fail to connect. The router forwards nothing, so this"
-note "double-checks the router; it is not the protection itself."
-pause "Press Enter once only $PORT was open and the internet could not connect."
+pause "Press Enter once only $PORT was open."
+say "From the internet. The home has one public address per internet connection"
+say "(WAN); with dual WAN there are two, and each must be tested."
+ask WAN_COUNT "How many internet connections does the router have? (1 or 2)"
+[[ "$WAN_COUNT" =~ ^[0-9]+$ ]] && ((WAN_COUNT >= 1)) || WAN_COUNT=1
+write_env WAN_COUNT "$WAN_COUNT"
+say "Find each public address. In a desktop qube, run a few times:"
+step "for i in 1 2 3 4 5; do curl -s https://api.ipify.org; echo; sleep 2; done"
+if ((WAN_COUNT > 1)); then
+  note "It prints the address of whichever WAN carried that request. With load balancing,"
+  note "both may show up. With failover, only the active WAN shows: read the other one on"
+  note "the router's status page (reading only), or ask the provider."
+  note "An address in 100.64.0.0 to 100.127.255.255 means that provider's carrier NAT:"
+  note "nothing on the internet can start a connection through it; test it anyway."
+fi
+say "On the phone, turn Wi-Fi off (mobile data only) and, for each public address,"
+say "open https://<public address>:$PORT/ in the phone's browser."
+note "Expect each one to time out or fail to connect. The router forwards nothing, so"
+note "this double-checks the router; it is not the protection itself."
+if ((WAN_COUNT > 1)); then
+  pause "Press Enter once all $WAN_COUNT public addresses failed to connect."
+else
+  pause "Press Enter once the internet could not connect."
+fi
 
 stage "Reboot the desktop, then check again"
 say "Last, prove it all survives a restart. This wizard ends here; the next"
