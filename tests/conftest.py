@@ -145,10 +145,9 @@ SAMPLE_CALENDAR_FILES = {
 
 def make_sample_calendar(root: Path) -> Path:
     """A Calendar with one event, as Radicale's collections folder holds it."""
-    events = root / "collection-root" / "owner" / "calendar"
-    events.mkdir(parents=True)
-    (events / ".Radicale.props").write_text('{"tag": "VCALENDAR"}')
-    (events / "dentist.ics").write_text(DENTIST)
+    for name, content in SAMPLE_CALENDAR_FILES.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(content)
     return root
 
 

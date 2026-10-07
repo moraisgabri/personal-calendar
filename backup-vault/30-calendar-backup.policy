@@ -4,7 +4,8 @@
 # calendar-server may deliver Backups to the vault qube, and nothing else:
 # only this one service, only from calendar-server, only to calendar-vault.
 # The first matching line wins, and 30- comes before Qubes' own defaults.
-# If the vault qube has another name, change calendar-vault on lines 1 and 3.
+# If the vault qube has another name, change calendar-vault in the first and
+# last rules.
 #
 # service                 argument  source           target          action
 personal-calendar.Backup  *         calendar-server  calendar-vault  allow

@@ -113,16 +113,16 @@ def restore(backup_file: Path, destination: Path, identity: Path,
 def receive(backups: Path, name: str, backup: bytes, keep: int = KEEP) -> None:
     """Store a delivered Backup in the vault, then keep only the newest ones."""
     if keep < 1:
-        raise ReceiveFailed("--keep must keep at least one Backup")
+        raise ReceiveFailed("the vault must keep at least one Backup")
     if not backups.is_dir():
         raise ReceiveFailed(f"{backups} is not a folder")
     # The name comes from another qube, so it is only ever a plain Backup name.
-    try:
-        if not BACKUP_NAME.fullmatch(name):
-            raise ValueError
-        taken = datetime.strptime(name, NAME_FORMAT).replace(tzinfo=timezone.utc)
-    except ValueError:
+    if not BACKUP_NAME.fullmatch(name):
         raise ReceiveFailed(f"{name!r} is not a Backup's name")
+    try:
+        taken = datetime.strptime(name, NAME_FORMAT).replace(tzinfo=timezone.utc)
+    except ValueError:  # e.g. month 13
+        raise ReceiveFailed(f"{name!r} is not a Backup's name") from None
     # A name from the future would sort after every real Backup, which would
     # then be pruned instead. An hour's leeway allows for clocks differing.
     if taken > datetime.now(timezone.utc) + timedelta(hours=1):

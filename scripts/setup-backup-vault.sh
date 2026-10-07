@@ -289,11 +289,12 @@ setup_stages() {
 
   stage "Check that only calendar-server can deliver Backups"
   say "From this qube ($THIS_QUBE), asking $VAULT_QUBE for the service must be refused:"
-  if qrexec-client-vm "$VAULT_QUBE" personal-calendar.Backup+calendar-20000101T000000Z.age \
-      </dev/null 2>&1 | grep -q "refused"; then
+  answer=$(qrexec-client-vm "$VAULT_QUBE" personal-calendar.Backup+calendar-20000101T000000Z.age \
+    </dev/null 2>&1 || true)
+  if grep -q "refused" <<<"$answer"; then
     printf '  %s✓ refused, as it should be%s\n' "$GREEN" "$RESET"
   else
-    warn "It was NOT refused: check the dom0 policy file (stage 6) before going on."
+    warn "It was NOT refused ($answer): check the dom0 policy file before going on."
     SKIPPED+=("the dom0 policy did not refuse $THIS_QUBE; fix it and re-check")
   fi
   say "Then, in the calendar-server terminal, a file copy to $VAULT_QUBE must fail too:"

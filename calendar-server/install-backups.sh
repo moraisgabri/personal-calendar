@@ -21,8 +21,8 @@ vault=""
 recipient=""
 while (($#)); do
   case "$1" in
-    --vault) vault="$2"; shift 2 ;;
-    --recipient) recipient="$2"; shift 2 ;;
+    --vault) vault="${2:-}"; shift 2 ;;
+    --recipient) recipient="${2:-}"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -59,13 +59,19 @@ mkdir -p "$HOME/.config/systemd/user"
 install -m 644 "$HERE/calendar-backup.service" "$HERE/calendar-backup.timer" \
   "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
-systemctl --user enable --now calendar-backup.timer
+# Not --now: started this long after boot, the timer would fire at once and
+# race the first Backup below. It starts with this qube's next restart.
+systemctl --user enable calendar-backup.timer
 
 echo "== Taking the first Backup now"
-if ! "$HOME/.local/bin/calendar-backup"; then
-  echo "The first Backup failed (see above). Fix it, then re-run this script." >&2
+if ! systemctl --user start calendar-backup.service; then
+  echo "The first Backup failed:" >&2
+  cat "$HOME/BACKUP-FAILED.txt" >&2
+  echo "Fix it, then re-run this script." >&2
   exit 1
 fi
+echo "It is in $vault."
 
 echo
-echo "Done. A failed Backup shows a notification and leaves ~/BACKUP-FAILED.txt."
+echo "Done. Backups run by themselves from this qube's next restart."
+echo "A failed Backup shows a notification and leaves ~/BACKUP-FAILED.txt."

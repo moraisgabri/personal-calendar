@@ -117,7 +117,12 @@ desktop. It also leaves `~/BACKUP-FAILED.txt` in `calendar-server` saying
 why, and the file goes away after the next Backup that works. The run repeats
 every 4 hours, so the notification does too until the problem is fixed. To
 try one by hand, in `calendar-server`: `systemctl --user start
-calendar-backup.service`.
+calendar-backup.service`. This covers every way a run can fail, but not a
+run that never starts, e.g. a broken timer. So now and then, glance at
+`ls -l ~/backups` in the vault qube, or run the restore drill.
+
+The restore drill is the one time a decrypted Calendar leaves the vault qube,
+and it goes only to the throwaway drill qube, which is removed at the end.
 
 **Where the Backup key lives:**
 
