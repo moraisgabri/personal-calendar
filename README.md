@@ -11,6 +11,41 @@ the Sync check:
 
     scripts/setup-calendar-server.sh
 
+## Calendar Server on the Home Network
+
+The phone and the laptop reach the Calendar Server at the desktop's fixed
+Home Network address, port 5232. Run the guided procedure from the qube
+holding this repo, after the Calendar Server is set up, and again after a
+reinstall of the desktop:
+
+    scripts/setup-home-network.sh
+
+It walks through these steps, saving the addresses to `.env` (git-ignored):
+
+1. **Router:** read the DHCP range, pick a fixed address for the desktop
+   outside it, and check the router forwards nothing to the desktop (no port
+   forwarding, no DMZ, no UPnP): the Calendar Server is not reachable from the
+   internet.
+2. **sys-net:** give its Home Network connection that fixed address with
+   `nmcli`. Qubes keeps NetworkManager connections in
+   `/rw/config/NM-system-connections`, so it survives restarts.
+3. **sys-net, then sys-firewall:** forward TCP 5232, and nothing else, from
+   the Home Network: sys-net → sys-firewall → calendar-server.
+   `home-network/forward-caldav.sh` writes the nftables rules into chains of
+   its own (`caldav-dnat`, `caldav-forward`) and, with `--install`, calls itself
+   from `/rw/config/qubes-firewall-user-script`, which Qubes runs on every start
+   of the qube. Re-running it replaces its rules; `--print` shows them.
+4. **calendar-server:** `install.sh` already accepts port 5232. The
+   certificate must name the fixed address: if it doesn't, re-make it with
+   `install.sh --name <calendar-server IP> --name <fixed address>
+   --renew-certificate`, and give every Device the new `server.crt` (the
+   wizard shows how for the Calendar Qube and Thunderbird; the phone and the
+   laptop accept it in their own setup).
+5. **Laptop:** run the Sync check against `https://<fixed address>:5232/`,
+   check that other ports on the desktop are closed, and that the home's
+   public address doesn't answer on 5232 from mobile data.
+6. **Reboot the desktop** and run the Sync check again.
+
 ## Set up the desktop Calendar Qube
 
 The Owner reads and edits the Calendar with khal (`khal list`, or the
