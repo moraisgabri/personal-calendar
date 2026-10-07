@@ -188,11 +188,27 @@ finish() {
 # Owner in a dom0 terminal; nothing here can reach dom0 by itself.
 # Assumes Qubes OS 4.2, the Calendar Server set up by
 # scripts/setup-calendar-server.sh, and a Fedora-based template.
+#
+#   scripts/setup-calendar-qube.sh            on the desktop
+#   scripts/setup-calendar-qube.sh --laptop   on the laptop (issue #6)
+#
+# The laptop's Calendar Qube is set up the same way, with one difference: it
+# reaches the Calendar Server over the Home Network, at the desktop's fixed
+# address (DESKTOP_LAN_IP), instead of inside the desktop. So there is no
+# sys-firewall rule to add, and the certificate is fetched over the Home
+# Network and checked against the desktop's by its fingerprint.
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 THIS_QUBE=$(qubesdb-read /name 2>/dev/null || hostname)
 QUBE=calendar
+
+MACHINE=desktop
+case "${1:-}" in
+  "") ;;
+  --laptop) MACHINE=laptop ;;
+  *) echo "Usage: $0 [--laptop]" >&2; exit 2 ;;
+esac
 
 # copy_install_files copies the repo's calendar-qube/ folder into the qube.
 copy_install_files() {
@@ -242,36 +258,91 @@ certificate_stage() {
   pause "Press Enter once it printed SYNC OK."
 }
 
+# fetch_certificate (laptop) has the Owner fetch the Calendar Server's
+# certificate over the Home Network into ~/server.crt in the Calendar Qube,
+# and trust it only if its fingerprint matches the desktop's. The certificate
+# is not secret; the fingerprint proves it is the Calendar Server's own and
+# not one swapped in by something else on the Wi-Fi.
+fetch_certificate() {
+  say "On the laptop, in a $QUBE terminal (dom0: qvm-run $QUBE xterm), run:"
+  step "python3 -c 'import ssl, sys; print(ssl.get_server_certificate((sys.argv[1], 5232)), end=\"\")' $SERVER_IP > ~/server.crt"
+  step "openssl x509 -in ~/server.crt -noout -fingerprint -sha256 -ext subjectAltName"
+  say "On the desktop, in a calendar-server terminal, run:"
+  step "openssl x509 -in ~/radicale/secrets/server.crt -noout -fingerprint -sha256"
+  note "Compare the two sha256 Fingerprint lines pair by pair, all 32 of them."
+  note "The laptop's subjectAltName must also list IP Address:$SERVER_IP."
+  if ! confirm "Is every pair identical, and is $SERVER_IP listed?"; then
+    warn "Don't use it. In $QUBE, delete it:  rm ~/server.crt"
+    warn "A different fingerprint means the laptop did not reach the Calendar Server"
+    warn "itself: check DESKTOP_LAN_IP in $ENV_FILE and that you are on the Home Network."
+    warn "A missing $SERVER_IP means the certificate must be re-made on the desktop"
+    warn "first (scripts/setup-home-network.sh there walks you through it)."
+    exit 1
+  fi
+}
+
+# laptop_certificate_stage (laptop, already set up) replaces the certificate
+# the Calendar Qube trusts, e.g. after it was re-made on the desktop.
+laptop_certificate_stage() {
+  stage "$QUBE: trust the Calendar Server's current certificate"
+  fetch_certificate
+  say "Then, in $QUBE:"
+  step "install -m 644 ~/server.crt ~/.config/vdirsyncer/server.crt && calendar-sync && echo SYNC OK"
+  pause "Press Enter once it printed SYNC OK."
+}
+
+# Where the certificate is in the Calendar Qube when install.sh runs.
+certificate_in_qube() {
+  if [[ "$MACHINE" == laptop ]]; then
+    printf '%s' "~/server.crt"
+  else
+    printf '%s' "~/QubesIncoming/calendar-server/server.crt"
+  fi
+}
+
 # khal_stages create the Calendar Qube with khal, Synced by vdirsyncer.
 khal_stages() {
   stage "dom0: create the Calendar Qube"
   say "In a dom0 terminal, run:"
   step "qvm-create --class AppVM --label purple $QUBE"
   step "qvm-start $QUBE"
-  step "qvm-prefs $QUBE ip"
-  note "It keeps internet access until the install is done (a later stage locks it down)."
-  note "The qube uses your default template; it must be Fedora-based (check: qvm-prefs $QUBE template)."
-  ask CALENDAR_QUBE_IP "Paste the IP that the last command printed:"
-  write_env CALENDAR_QUBE_IP "$CALENDAR_QUBE_IP"
+  if [[ "$MACHINE" == laptop ]]; then
+    note "This is the laptop's dom0. $QUBE reaches the Home Network through the"
+    note "laptop's usual sys-firewall and sys-net, so no sys-firewall rule is needed."
+    note "It keeps internet access until the install is done (a later stage locks it down)."
+    note "The qube uses your default template; it must be Fedora-based (check: qvm-prefs $QUBE template)."
+    pause "Press Enter once $QUBE is running."
+  else
+    step "qvm-prefs $QUBE ip"
+    note "It keeps internet access until the install is done (a later stage locks it down)."
+    note "The qube uses your default template; it must be Fedora-based (check: qvm-prefs $QUBE template)."
+    ask CALENDAR_QUBE_IP "Paste the IP that the last command printed:"
+    write_env CALENDAR_QUBE_IP "$CALENDAR_QUBE_IP"
 
-  stage "sys-firewall: allow $QUBE to reach the Calendar Server"
-  say "Open a terminal in sys-firewall (dom0: qvm-run sys-firewall xterm) and run:"
-  rule="nft add rule ip qubes custom-forward ip saddr $CALENDAR_QUBE_IP ip daddr $CALENDAR_SERVER_IP tcp dport 5232 ct state new accept"
-  step "grep -qxF '$rule' /rw/config/qubes-firewall-user-script || echo '$rule' | sudo tee -a /rw/config/qubes-firewall-user-script"
-  step "sudo chmod +x /rw/config/qubes-firewall-user-script"
-  step "sudo $rule"
-  note "The first two lines make the rule survive restarts; the last applies it now."
-  pause "Press Enter once all three commands ran without errors."
+    stage "sys-firewall: allow $QUBE to reach the Calendar Server"
+    say "Open a terminal in sys-firewall (dom0: qvm-run sys-firewall xterm) and run:"
+    rule="nft add rule ip qubes custom-forward ip saddr $CALENDAR_QUBE_IP ip daddr $SERVER_IP tcp dport 5232 ct state new accept"
+    step "grep -qxF '$rule' /rw/config/qubes-firewall-user-script || echo '$rule' | sudo tee -a /rw/config/qubes-firewall-user-script"
+    step "sudo chmod +x /rw/config/qubes-firewall-user-script"
+    step "sudo $rule"
+    note "The first two lines make the rule survive restarts; the last applies it now."
+    pause "Press Enter once all three commands ran without errors."
+  fi
 
   stage "Copy the install files and the certificate into $QUBE"
   copy_install_files
-  say "Now the certificate. In a calendar-server terminal, run this and choose $QUBE:"
-  step "qvm-copy ~/radicale/secrets/server.crt"
-  pause "Press Enter once copied."
+  if [[ "$MACHINE" == laptop ]]; then
+    say "Now the certificate, straight from the Calendar Server, checked against the desktop."
+    fetch_certificate
+  else
+    say "Now the certificate. In a calendar-server terminal, run this and choose $QUBE:"
+    step "qvm-copy ~/radicale/secrets/server.crt"
+    pause "Press Enter once copied."
+  fi
 
   stage "$QUBE: install the Calendar"
   say "Open a terminal in $QUBE (dom0: qvm-run $QUBE xterm) and run:"
-  step "bash ~/QubesIncoming/$THIS_QUBE/calendar-qube/install.sh --server https://$CALENDAR_SERVER_IP:5232/ --certificate ~/QubesIncoming/calendar-server/server.crt"
+  step "bash ~/QubesIncoming/$THIS_QUBE/calendar-qube/install.sh --server https://$SERVER_IP:5232/ --certificate $(certificate_in_qube)"
   note "It asks for the Owner's Calendar password (from your password manager)"
   note "and saves it in $QUBE, readable only by you there."
   pause "Press Enter once it printed 'Done.'"
@@ -280,10 +351,10 @@ khal_stages() {
   say "In dom0, run:"
   step "qvm-firewall $QUBE reset"
   step "qvm-firewall $QUBE del accept"
-  step "qvm-firewall $QUBE add accept dsthost=$CALENDAR_SERVER_IP proto=tcp dstports=5232"
+  step "qvm-firewall $QUBE add accept dsthost=$SERVER_IP proto=tcp dstports=5232"
   step "qvm-firewall $QUBE add drop"
   step "qvm-firewall $QUBE list"
-  note "The list must show exactly two rules: accept to $CALENDAR_SERVER_IP port 5232, then drop."
+  note "The list must show exactly two rules: accept to $SERVER_IP port 5232, then drop."
   note "To update khal or vdirsyncer later, open it up again with: qvm-firewall $QUBE reset"
   pause "Press Enter once the list looks like that."
 
@@ -306,6 +377,68 @@ khal_stages() {
   say "Then, after a minute, in a new $QUBE terminal:"
   step "systemctl --user list-timers calendar-sync.timer"
   pause "Press Enter once it shows a recent LAST run."
+
+  [[ "$MACHINE" == laptop ]] || return 0
+  laptop_agreement_stages
+}
+
+# laptop_agreement_stages prove the three Devices agree, and that the laptop
+# keeps working away from the Home Network.
+laptop_agreement_stages() {
+  stage "All three Devices agree"
+  say "1. On the laptop, in $QUBE:"
+  step "khal new 2030-01-03 10:00 11:00 'From the laptop' && calendar-sync"
+  say "   On the desktop, in its $QUBE:"
+  step "calendar-sync && khal list 2030-01-03 1d"
+  say "   On the phone, in DAVx5, tap Synchronize now, then open Fossify Calendar on 2030-01-03."
+  note "   Expect 'From the laptop' on both. (No phone yet? See docs/phone.md and check it later.)"
+  say "2. The reverse. On the desktop, in its $QUBE:"
+  step "khal new 2030-01-03 12:00 13:00 'From the desktop' && calendar-sync"
+  say "   On the phone, in Fossify Calendar, add 'From the phone' on 2030-01-03 at 14:00,"
+  say "   then in DAVx5 tap Synchronize now. Then, on the laptop, in $QUBE:"
+  step "calendar-sync && khal list 2030-01-03 1d"
+  note "   Expect all three events on the laptop."
+  pause "Press Enter once all three Devices showed all three events."
+
+  stage "Away from the Home Network"
+  say "Take the laptop off the Home Network: disconnect its Wi-Fi (the network"
+  say "icon in the top bar, from sys-net), or connect to another network. Then, in $QUBE:"
+  step "khal list 2030-01-03 1d"
+  step "khal new 2030-01-03 16:00 17:00 'Edited away'"
+  step "calendar-sync; echo \"exit \$?\""
+  note "Expect the three events listed, and calendar-sync failing (exit not 0) with"
+  note "no notification: an unreachable Calendar Server is only logged."
+  pause "Press Enter once that looked right."
+  say "Reconnect the laptop to the Home Network. Then, in $QUBE:"
+  step "calendar-sync && echo SYNC OK"
+  say "On the desktop, in its $QUBE:"
+  step "calendar-sync && khal list 2030-01-03 1d"
+  note "Expect 'Edited away' on the desktop too."
+  pause "Press Enter once it reached the desktop."
+  say "Remove the four test events: on the laptop, in $QUBE, run"
+  step "rm \$(grep -l -e 'From the laptop' -e 'From the desktop' -e 'From the phone' -e 'Edited away' ~/.local/share/calendar/events/*.ics) && calendar-sync"
+  note "If they were the Calendar's only events, run  vdirsyncer sync --force-delete calendar  instead."
+  note "The other Devices drop them on their next Sync."
+  pause "Press Enter once done."
+}
+
+# Stop and restart the Calendar Server as seen from this machine, for the
+# Thunderbird offline check. On the laptop, leaving the Home Network does it.
+server_off_steps() {
+  if [[ "$MACHINE" == laptop ]]; then
+    say "4. Take the laptop off the Home Network: disconnect its Wi-Fi."
+  else
+    say "4. Stop the Calendar Server, in a calendar-server terminal:"
+    step "sudo systemctl stop radicale.service"
+  fi
+}
+server_on_steps() {
+  if [[ "$MACHINE" == laptop ]]; then
+    say "   Reconnect the laptop to the Home Network."
+  else
+    say "   Start the Calendar Server again:"
+    step "sudo systemctl start radicale.service"
+  fi
 }
 
 # thunderbird_stages add the Calendar to Thunderbird in the Calendar Qube.
@@ -332,7 +465,7 @@ thunderbird_stages() {
   step "thunderbird"
   note "Close the account setup it offers (no email account is needed), then quit Thunderbird."
   say "Then run:"
-  step "bash ~/QubesIncoming/$THIS_QUBE/calendar-qube/install-thunderbird.sh --server https://$CALENDAR_SERVER_IP:5232/ --certificate ~/.config/vdirsyncer/server.crt"
+  step "bash ~/QubesIncoming/$THIS_QUBE/calendar-qube/install-thunderbird.sh --server https://$SERVER_IP:5232/ --certificate ~/.config/vdirsyncer/server.crt"
   say "Start Thunderbird again and open its Calendar tab. It asks for the Owner's"
   say "Calendar password (from your password manager): tick the box to remember it."
   note "There must be no certificate warning. If there is one, stop: the certificate is wrong."
@@ -346,16 +479,14 @@ thunderbird_stages() {
   note "   In Thunderbird, right-click the Calendar and choose Synchronize Calendars: 'khal test' appears."
   say "3. In dom0, check the firewall did not change:"
   step "qvm-firewall $QUBE list"
-  note "   Still exactly two rules: accept to $CALENDAR_SERVER_IP port 5232, then drop."
+  note "   Still exactly two rules: accept to $SERVER_IP port 5232, then drop."
   pause "Press Enter once all three looked right."
-  say "4. Stop the Calendar Server, in a calendar-server terminal:"
-  step "sudo systemctl stop radicale.service"
+  server_off_steps
   say "   Quit and restart Thunderbird, then Synchronize Calendars: the Calendar is"
   say "   still there, read from Thunderbird's own copy."
   say "   Now choose File > Offline > Work Offline, and rename 'Thunderbird test'"
   say "   to 'Thunderbird offline edit'."
-  say "   Start the Calendar Server again:"
-  step "sudo systemctl start radicale.service"
+  server_on_steps
   say "   In Thunderbird, choose File > Offline > Work Online, then Synchronize Calendars. In $QUBE:"
   step "calendar-sync && khal list 2030-01-02 1d"
   note "   Expect 'Thunderbird offline edit' and 'khal test'."
@@ -368,7 +499,12 @@ thunderbird_stages() {
 }
 
 ALREADY_SET_UP=no
-printf '\n%s  Desktop Calendar Qube with khal and Thunderbird%s\n\n' "$BOLD" "$RESET"
+if [[ "$MACHINE" == laptop ]]; then
+  TITLE="Laptop Calendar Qube with khal and Thunderbird"
+else
+  TITLE="Desktop Calendar Qube with khal and Thunderbird"
+fi
+printf '\n%s  %s%s\n\n' "$BOLD" "$TITLE" "$RESET"
 if confirm "Is $QUBE already set up with khal (from an earlier run of this wizard)?"; then
   ALREADY_SET_UP=yes
   TOTAL_STAGES=5
@@ -376,18 +512,39 @@ else
   TOTAL_STAGES=10
 fi
 
-banner "Desktop Calendar Qube with khal and Thunderbird (issues #5, #11)"
+if [[ "$MACHINE" == laptop ]]; then
+  banner "$TITLE (issue #6)"
 
-CALENDAR_SERVER_IP=$(_existing CALENDAR_SERVER_IP || true)
-if [[ -z "$CALENDAR_SERVER_IP" ]]; then
-  say "The Calendar Server's IP is not in $ENV_FILE yet (setup-calendar-server.sh saves it)."
-  say "In dom0, run:  qvm-prefs calendar-server ip"
-  ask CALENDAR_SERVER_IP "Paste the IP it printed:"
-  write_env CALENDAR_SERVER_IP "$CALENDAR_SERVER_IP"
+  SERVER_IP=$(_existing DESKTOP_LAN_IP || true)
+  if [[ -z "$SERVER_IP" ]]; then
+    say "The desktop's fixed Home Network address is not in $ENV_FILE yet."
+    say "On the desktop it is DESKTOP_LAN_IP in the repo's .env (scripts/setup-home-network.sh saved it)."
+    ask DESKTOP_LAN_IP "The desktop's Home Network address, e.g. 192.168.1.5:"
+    write_env DESKTOP_LAN_IP "$DESKTOP_LAN_IP"
+    SERVER_IP=$DESKTOP_LAN_IP
+  fi
+
+  if [[ "$ALREADY_SET_UP" == yes ]]; then
+    laptop_certificate_stage
+  else
+    khal_stages
+  fi
+  thunderbird_stages
+else
+  banner "$TITLE (issues #5, #11)"
+
+  CALENDAR_SERVER_IP=$(_existing CALENDAR_SERVER_IP || true)
+  if [[ -z "$CALENDAR_SERVER_IP" ]]; then
+    say "The Calendar Server's IP is not in $ENV_FILE yet (setup-calendar-server.sh saves it)."
+    say "In dom0, run:  qvm-prefs calendar-server ip"
+    ask CALENDAR_SERVER_IP "Paste the IP it printed:"
+    write_env CALENDAR_SERVER_IP "$CALENDAR_SERVER_IP"
+  fi
+  SERVER_IP=$CALENDAR_SERVER_IP
+
+  certificate_stage
+  [[ "$ALREADY_SET_UP" == yes ]] || khal_stages
+  thunderbird_stages
 fi
-
-certificate_stage
-[[ "$ALREADY_SET_UP" == yes ]] || khal_stages
-thunderbird_stages
 
 finish

@@ -2,8 +2,10 @@
 with a real Calendar Server. Each Calendar Qube gets its own home directory,
 so two of them model two Devices."""
 
+import hashlib
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import uuid
@@ -273,3 +275,34 @@ def test_the_owner_resolves_a_conflict_by_choosing_a_side(
     assert server_titles(server) == [title]
     assert laptop.titles() == [title]
     assert laptop.sync().returncode == 0
+
+
+def fingerprint(pem: str) -> str:
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+
+
+def test_the_laptop_syncs_by_ip_with_a_certificate_fetched_over_the_network(
+    start_server: StartServer, make_calendar_qube: MakeCalendarQube
+) -> None:
+    """The laptop's Calendar Qube differs from the desktop's only in the
+    address: the desktop's IP on the Home Network. It fetches the certificate
+    from that address, as setup-calendar-qube.sh --laptop has the Owner do,
+    and trusts it once its fingerprint matches the Calendar Server's own."""
+    server = start_server()
+    port = int(server.url.rstrip("/").rsplit(":", 1)[1])
+    by_ip = f"https://127.0.0.1:{port}/"
+    fetched = ssl.get_server_certificate(("127.0.0.1", port))
+    assert fingerprint(fetched) == fingerprint(server.certificate.read_text())
+    desktop, laptop = make_calendar_qube(server), make_calendar_qube(server)
+    (laptop.home / ".config/vdirsyncer/server.crt").write_text(fetched)
+    laptop.point_at(by_ip)
+    assert laptop.run("vdirsyncer", "discover", "calendar").returncode == 0  # as install.sh does
+    put_event(server, "from-desktop", "Dentist")
+
+    result = laptop.sync()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert laptop.titles() == ["Dentist"]
+    desktop_config = (desktop.home / ".config/vdirsyncer/config").read_text()
+    laptop_config = (laptop.home / ".config/vdirsyncer/config").read_text()
+    assert laptop_config == desktop_config.replace(server.url, by_ip)
