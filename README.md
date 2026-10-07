@@ -52,6 +52,43 @@ sends its edit and asks whether to overwrite the Calendar Server's version or
 discard its own change. That hasn't been checked for edits made while working
 offline. `calendar-sync --keep` only settles conflicts in khal's local copy.
 
+## Set up the laptop Calendar Qube
+
+The laptop gets its own Calendar Qube, set up exactly like the desktop's by the
+same wizard, with one difference: it reaches the Calendar Server over the Home
+Network, at the desktop's fixed address, instead of inside the desktop. So:
+
+- the Calendar Server's address is `https://<DESKTOP_LAN_IP>:5232/`, the
+  desktop's Home Network address (`DESKTOP_LAN_IP` in the desktop's `.env`);
+- no sys-firewall rule is needed: the laptop's Calendar Qube goes out through
+  the laptop's usual sys-firewall and sys-net, and its own firewall lets it
+  reach only that address, port 5232;
+- the certificate is fetched from the Calendar Server over the Home Network
+  and trusted only once its SHA-256 fingerprint matches the one shown on the
+  desktop. It isn't secret, so no USB stick is needed; the fingerprint proves
+  it is the Calendar Server's own.
+
+On the laptop, in any qube with internet access (e.g. `personal`; install
+`git` in its template if missing), clone the repo and run the wizard there:
+
+    git clone https://github.com/moraisgabri/personal-calendar.git
+    cd personal-calendar
+    scripts/setup-calendar-qube.sh --laptop
+
+The laptop has its own `.env`, holding only `DESKTOP_LAN_IP`; the wizard asks
+for it the first time. It ends by checking that an event made on any Device
+reaches the other two, and that away from the Home Network the laptop still
+reads the Calendar and sends its edits once back.
+
+## Set up the phone
+
+The GrapheneOS phone Syncs with DAVx⁵ and shows the Calendar in Fossify
+Calendar, both from F-Droid. [docs/phone.md](docs/phone.md) is the checklist;
+the wizard shows the same steps one at a time, with the address and the
+certificate's fingerprint filled in, and the checks against the desktop's khal:
+
+    scripts/setup-phone.sh
+
 ## Sync check
 
 Proves a Calendar Server works, acting as a Device: it creates, reads back and
