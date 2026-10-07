@@ -22,10 +22,12 @@ reinstall of the desktop:
 
 It walks through these steps, saving the addresses to `.env` (git-ignored):
 
-1. **Router:** read the DHCP range, pick a fixed address for the desktop
-   outside it, and check the router forwards nothing to the desktop (no port
-   forwarding, no DMZ, no UPnP): the Calendar Server is not reachable from the
-   internet.
+1. **Fixed address:** pick one for the desktop that the router won't hand to
+   another device. Nothing on the router changes. Either read the DHCP range
+   on the router's admin page and pick an address outside it, then check that
+   the router forwards nothing to the desktop (no port forwarding, no DMZ, no
+   UPnP). Or skip the admin page: the wizard suggests a high address such as
+   `.250` and checks with `arping` that no device uses it.
 2. **sys-net:** give its Home Network connection that fixed address with
    `nmcli`. Qubes keeps NetworkManager connections in
    `/rw/config/NM-system-connections`, so it survives restarts.
@@ -43,7 +45,8 @@ It walks through these steps, saving the addresses to `.env` (git-ignored):
    laptop accept it in their own setup).
 5. **Laptop:** run the Sync check against `https://<fixed address>:5232/`,
    check that other ports on the desktop are closed, and that the home's
-   public address doesn't answer on 5232 from mobile data.
+   public address doesn't answer on 5232 from mobile data. With dual WAN,
+   test both public addresses.
 6. **Reboot the desktop** and run the Sync check again.
 
 ## Set up the desktop Calendar Qube
