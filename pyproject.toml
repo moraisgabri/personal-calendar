@@ -9,6 +9,7 @@ dev = ["radicale[bcrypt]", "cryptography", "vdirsyncer", "khal", "pytest", "mypy
 
 [project.scripts]
 sync-check = "personal_calendar.sync_check:main"
+backup = "personal_calendar.backup:main"
 
 [build-system]
 requires = ["setuptools>=68"]

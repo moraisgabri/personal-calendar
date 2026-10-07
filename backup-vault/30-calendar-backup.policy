@@ -1,0 +1,13 @@
+# dom0: /etc/qubes/policy.d/30-calendar-backup.policy (Qubes OS 4.2 format).
+# The Owner types it in dom0; scripts/setup-backup-vault.sh shows how.
+#
+# calendar-server may deliver Backups to the vault qube, and nothing else:
+# only this one service, only from calendar-server, only to calendar-vault.
+# The first matching line wins, and 30- comes before Qubes' own defaults.
+# If the vault qube has another name, change calendar-vault in the first and
+# last rules.
+#
+# service                 argument  source           target          action
+personal-calendar.Backup  *         calendar-server  calendar-vault  allow
+personal-calendar.Backup  *         @anyvm           @anyvm          deny
+*                         *         calendar-server  calendar-vault  deny

@@ -133,9 +133,88 @@ refused. Standard library only, so it can be copied to any qube:
     python3 src/personal_calendar/sync_check.py https://<address>:5232/ \
         --user owner --certificate server.crt
 
+## Backup
+
+Turns the whole Calendar into one encrypted Backup, named by when it was
+taken, and restores one. It encrypts with `age`, so `backup` needs only the
+public key; `restore` needs the private key. Standard library only, plus the
+`age` package from the template (`sudo dnf install age`):
+
+    age-keygen -o backup-key.txt     # prints the public key, age1...
+    python3 src/personal_calendar/backup.py backup /home/user/radicale/collections \
+        /backups --recipient age1...
+    python3 src/personal_calendar/backup.py restore /backups/calendar-20261005T120000Z.age \
+        /home/user/restored --identity backup-key.txt
+
+`restore` checks the whole Backup before writing anything: a wrong key or a
+damaged Backup fails and leaves the folder untouched. It refuses a folder that
+isn't empty unless given `--force`, which replaces what the folder holds.
+A `backup` that can't be taken exits non-zero with `FAIL backup: ...` and
+leaves no file behind; it never replaces a Backup already there.
+
+## Scheduled Backups
+
+While the desktop is on, `calendar-server` takes a Backup 5 minutes after it
+starts and every 4 hours after that, and delivers it to `calendar-vault`, an
+offline vault qube with no network. Run the guided procedure from the qube
+holding this repo. It creates the vault qube, the dom0 policy and the
+schedule, and finishes with a restore drill:
+
+    scripts/setup-backup-vault.sh
+
+Re-run it now and then and answer "yes" to the first question: that runs
+only the restore drill. The drill restores the latest Backup into a fresh,
+throwaway Calendar Server and runs the Sync check against it.
+
+How it fits together:
+
+- `calendar-server/calendar-backup` (run by `calendar-backup.timer`, a user
+  timer) encrypts the Backup with the public key, hands it to the vault qube
+  with `qrexec-client-vm calendar-vault personal-calendar.Backup+<name>`, and
+  keeps no copy.
+- In the vault qube, the `personal-calendar.Backup` qrexec service
+  (`backup-vault/`) runs `backup.py receive`. It stores the Backup in
+  `~/backups` under its timestamped name and keeps the newest 60, about a
+  month of work days. It refuses anything that isn't an age-encrypted Backup
+  with a proper name, a name from the future, and a name already there. The
+  service is installed under `/usr/local`, which a Qubes AppVM keeps across
+  restarts.
+- The dom0 policy, `/etc/qubes/policy.d/30-calendar-backup.policy` (see
+  `backup-vault/30-calendar-backup.policy`), allows that one service, only
+  from `calendar-server`, only to the vault qube. It also denies everything
+  else from `calendar-server` to the vault qube.
+
+**A failed Backup** shows a "Calendar Backup failed" notification on the
+desktop. It also leaves `~/BACKUP-FAILED.txt` in `calendar-server` saying
+why, and the file goes away after the next Backup that works. The run repeats
+every 4 hours, so the notification does too until the problem is fixed. To
+try one by hand, in `calendar-server`: `systemctl --user start
+calendar-backup.service`. This covers every way a run can fail, but not a
+run that never starts, e.g. a broken timer. So now and then, glance at
+`ls -l ~/backups` in the vault qube, or run the restore drill.
+
+The restore drill is the one time a decrypted Calendar leaves the vault qube,
+and it goes only to the throwaway drill qube, which is removed at the end.
+
+**Where the Backup key lives:**
+
+- The **public key** (`age1...`) is in `calendar-server`, in
+  `~/.config/calendar-backup/settings`, and in this repo qube's `.env`. It can
+  make Backups but not read them.
+- The **private key** is only in the vault qube, at `~/backup-key.txt`, plus
+  one **offline copy** the Owner keeps away from the desktop (on paper or an
+  encrypted USB stick). That copy is what restores the Calendar if the desktop
+  is lost. The private key is never in `calendar-server`, any other qube, or
+  this repo.
+
+Known limit: a compromised `calendar-server` can't read Backups, but it could
+flood the vault with fresh junk Backups until the good ones are pruned. Only
+an off-site Backup, out of scope for now, would protect against that.
+
 ## Development
 
     sudo dnf install nss-tools     # certutil, for Thunderbird's tests
+    sudo dnf install age           # for the Backup tests
     python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
     .venv/bin/mypy
     .venv/bin/pytest

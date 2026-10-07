@@ -1,0 +1,11 @@
+# calendar-server starts with the desktop, so Backups run while it is on:
+# soon after it starts, then every 4 hours.
+[Unit]
+Description=Back up the Calendar soon after the desktop starts, then every 4 hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=4h
+
+[Install]
+WantedBy=timers.target

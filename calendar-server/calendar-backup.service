@@ -1,0 +1,10 @@
+# Take a Backup of the Calendar and deliver it to the vault qube. A user unit,
+# like calendar-sync in the Calendar Qube: it runs as unconfined_t, so SELinux
+# lets it execute the scripts under /home, and it can show a notification on
+# the desktop when it fails. Installed by install-backups.sh.
+[Unit]
+Description=Back up the Calendar to the vault qube
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/calendar-backup
