@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# Take a Backup of the Calendar and deliver it to the vault qube. Run by
+# calendar-backup.timer; the Owner can also run it by hand:
+#
+#   calendar-backup
+#
+# Its settings, written by install-backups.sh, are in
+# ~/.config/calendar-backup/settings:
+#
+#   VAULT=calendar-vault    the vault qube the Backups go to
+#   RECIPIENT=age1...       the public half of the Backup key
+#
+# The Backup is encrypted before it leaves this script and no copy stays in
+# calendar-server: it lives only in the vault qube.
+#
+# A failed run is loud: a critical notification on the desktop, and
+# ~/BACKUP-FAILED.txt saying why, which stays until a run succeeds.
+
+set -uo pipefail
+
+SETTINGS=$HOME/.config/calendar-backup/settings
+CALENDAR=$HOME/radicale/collections
+PROGRAM=$HOME/.local/lib/personal-calendar/backup.py
+MARKER=$HOME/BACKUP-FAILED.txt
+SERVICE=personal-calendar.Backup
+
+fail() {
+  local reason="$1"
+  echo "Calendar Backup failed: $reason" >&2
+  {
+    echo "The Calendar Backup of $(date '+%Y-%m-%d %H:%M') failed:"
+    echo "$reason"
+    echo
+    echo "This file goes away by itself after the next Backup that works."
+    echo "Try one now with: calendar-backup"
+  } > "$MARKER"
+  command -v notify-send >/dev/null &&
+    notify-send --urgency=critical "Calendar Backup failed" \
+      "$reason (calendar-server: ~/BACKUP-FAILED.txt)" 2>/dev/null
+  exit 1
+}
+
+VAULT=""
+RECIPIENT=""
+[[ -r "$SETTINGS" ]] || fail "no settings in $SETTINGS; run install-backups.sh"
+# shellcheck source=/dev/null
+source "$SETTINGS"
+[[ -n "$VAULT" && -n "$RECIPIENT" ]] || fail "$SETTINGS must set VAULT and RECIPIENT"
+
+work=$(mktemp -d) || fail "could not make a temporary folder"
+trap 'rm -rf "$work"' EXIT
+
+backup=$(python3 "$PROGRAM" backup "$CALENDAR" "$work" --recipient "$RECIPIENT" \
+  2>"$work/error") || fail "$(cat "$work/error")"
+name=$(basename "$backup")
+
+# The vault answers "stored <name>" only once the Backup is safely written.
+reply=$(qrexec-client-vm "$VAULT" "$SERVICE+$name" < "$backup" 2>"$work/error")
+[[ "$reply" == "stored $name" ]] ||
+  fail "$VAULT did not store $name: $(cat "$work/error") ${reply:-(no answer)}"
+
+rm -f "$MARKER"
+echo "Backup $name delivered to $VAULT."

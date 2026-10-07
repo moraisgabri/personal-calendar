@@ -8,16 +8,24 @@ archive and encrypted with `age` to the Owner's public key:
     python3 backup.py restore /backups/calendar-....age /home/user/restored \\
         --identity backup-key.txt
 
+In the vault qube, `receive` stores a Backup delivered on stdin by the
+personal-calendar.Backup qrexec service, keeping only the newest ones:
+
+    python3 backup.py receive /home/user/backups calendar-....age < Backup
+
 Standard library only, plus the `age` command from the template.
 """
 
 import argparse
 import io
+import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
-from datetime import datetime, timezone
+import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -27,6 +35,18 @@ class BackupFailed(Exception):
 
 class RestoreFailed(Exception):
     pass
+
+
+class ReceiveFailed(Exception):
+    pass
+
+
+# calendar-20261005T120000Z.age: when the Backup was taken, in UTC.
+NAME_FORMAT = "calendar-%Y%m%dT%H%M%SZ.age"
+BACKUP_NAME = re.compile(r"calendar-\d{8}T\d{6}Z\.age")
+AGE_HEADER = b"age-encryption.org/v1\n"
+# About a month of work days, at a few Backups a day.
+KEEP = 60
 
 
 def pack(calendar: Path) -> bytes:
@@ -41,7 +61,7 @@ def backup(calendar: Path, backups: Path, recipient: str) -> Path:
         if not folder.is_dir():
             raise BackupFailed(f"{folder} is not a folder")
     taken = datetime.now(timezone.utc)
-    destination = backups / taken.strftime("calendar-%Y%m%dT%H%M%SZ.age")
+    destination = backups / taken.strftime(NAME_FORMAT)
     # age --output would silently replace a Backup taken in the same second.
     try:
         output = destination.open("xb")
@@ -90,6 +110,45 @@ def restore(backup_file: Path, destination: Path, identity: Path,
         tar.extractall(destination, filter="data")
 
 
+def receive(backups: Path, name: str, backup: bytes, keep: int = KEEP) -> None:
+    """Store a delivered Backup in the vault, then keep only the newest ones."""
+    if keep < 1:
+        raise ReceiveFailed("--keep must keep at least one Backup")
+    if not backups.is_dir():
+        raise ReceiveFailed(f"{backups} is not a folder")
+    # The name comes from another qube, so it is only ever a plain Backup name.
+    try:
+        if not BACKUP_NAME.fullmatch(name):
+            raise ValueError
+        taken = datetime.strptime(name, NAME_FORMAT).replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ReceiveFailed(f"{name!r} is not a Backup's name")
+    # A name from the future would sort after every real Backup, which would
+    # then be pruned instead. An hour's leeway allows for clocks differing.
+    if taken > datetime.now(timezone.utc) + timedelta(hours=1):
+        raise ReceiveFailed(f"{name} was taken in the future; is a clock wrong?")
+    if not backup.startswith(AGE_HEADER):
+        raise ReceiveFailed(f"{name} is not an age-encrypted Backup")
+    # Write it under a temporary name first, so a half-written Backup never
+    # carries a Backup's name; linking it into place fails if the name is taken.
+    with tempfile.NamedTemporaryFile(dir=backups, prefix=".receiving-") as incoming:
+        incoming.write(backup)
+        incoming.flush()
+        os.fsync(incoming.fileno())
+        try:
+            os.link(incoming.name, backups / name)
+        except FileExistsError:
+            raise ReceiveFailed(f"{name} is already in the vault; not replacing it")
+    prune(backups, keep)
+
+
+def prune(backups: Path, keep: int) -> None:
+    # Backup names sort by when they were taken; nothing else is touched.
+    taken = sorted(path for path in backups.iterdir() if BACKUP_NAME.fullmatch(path.name))
+    for old in taken[:-keep]:
+        old.unlink()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     operations = parser.add_subparsers(dest="operation", required=True)
@@ -107,8 +166,22 @@ def main() -> None:
     restore_parser.add_argument("--force", action="store_true",
                                 help="replace whatever the folder holds")
 
+    receive_parser = operations.add_parser(
+        "receive", help="store a Backup read from stdin (in the vault qube)")
+    receive_parser.add_argument("backups", type=Path, help="the vault's Backups folder")
+    receive_parser.add_argument("name", help="the Backup's name, as it was taken")
+    receive_parser.add_argument("--keep", type=int, default=KEEP,
+                                help=f"how many Backups to keep (default {KEEP})")
+
     arguments = parser.parse_args()
-    if arguments.operation == "backup":
+    if arguments.operation == "receive":
+        try:
+            receive(arguments.backups, arguments.name, sys.stdin.buffer.read(),
+                    arguments.keep)
+        except ReceiveFailed as failure:
+            sys.exit(f"FAIL receive: {failure}")
+        print(f"stored {arguments.name}")
+    elif arguments.operation == "backup":
         try:
             print(backup(arguments.calendar, arguments.backups, arguments.recipient))
         except BackupFailed as failure:

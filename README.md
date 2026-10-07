@@ -80,6 +80,60 @@ isn't empty unless given `--force`, which replaces what the folder holds.
 A `backup` that can't be taken exits non-zero with `FAIL backup: ...` and
 leaves no file behind; it never replaces a Backup already there.
 
+## Scheduled Backups
+
+While the desktop is on, `calendar-server` takes a Backup 5 minutes after it
+starts and every 4 hours after that, and delivers it to `calendar-vault`, an
+offline vault qube with no network. Run the guided procedure from the qube
+holding this repo. It creates the vault qube, the dom0 policy and the
+schedule, and finishes with a restore drill:
+
+    scripts/setup-backup-vault.sh
+
+Re-run it now and then and answer "yes" to the first question: that runs
+only the restore drill. The drill restores the latest Backup into a fresh,
+throwaway Calendar Server and runs the Sync check against it.
+
+How it fits together:
+
+- `calendar-server/calendar-backup` (run by `calendar-backup.timer`, a user
+  timer) encrypts the Backup with the public key, hands it to the vault qube
+  with `qrexec-client-vm calendar-vault personal-calendar.Backup+<name>`, and
+  keeps no copy.
+- In the vault qube, the `personal-calendar.Backup` qrexec service
+  (`backup-vault/`) runs `backup.py receive`. It stores the Backup in
+  `~/backups` under its timestamped name and keeps the newest 60, about a
+  month of work days. It refuses anything that isn't an age-encrypted Backup
+  with a proper name, a name from the future, and a name already there. The
+  service is installed under `/usr/local`, which a Qubes AppVM keeps across
+  restarts.
+- The dom0 policy, `/etc/qubes/policy.d/30-calendar-backup.policy` (see
+  `backup-vault/30-calendar-backup.policy`), allows that one service, only
+  from `calendar-server`, only to the vault qube. It also denies everything
+  else from `calendar-server` to the vault qube.
+
+**A failed Backup** shows a "Calendar Backup failed" notification on the
+desktop. It also leaves `~/BACKUP-FAILED.txt` in `calendar-server` saying
+why, and the file goes away after the next Backup that works. The run repeats
+every 4 hours, so the notification does too until the problem is fixed. To
+try one by hand, in `calendar-server`: `systemctl --user start
+calendar-backup.service`.
+
+**Where the Backup key lives:**
+
+- The **public key** (`age1...`) is in `calendar-server`, in
+  `~/.config/calendar-backup/settings`, and in this repo qube's `.env`. It can
+  make Backups but not read them.
+- The **private key** is only in the vault qube, at `~/backup-key.txt`, plus
+  one **offline copy** the Owner keeps away from the desktop (on paper or an
+  encrypted USB stick). That copy is what restores the Calendar if the desktop
+  is lost. The private key is never in `calendar-server`, any other qube, or
+  this repo.
+
+Known limit: a compromised `calendar-server` can't read Backups, but it could
+flood the vault with fresh junk Backups until the good ones are pruned. Only
+an off-site Backup, out of scope for now, would protect against that.
+
 ## Development
 
     sudo dnf install nss-tools     # certutil, for Thunderbird's tests

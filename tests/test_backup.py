@@ -9,45 +9,7 @@ from pathlib import Path
 
 import pytest
 
-DENTIST = """BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//personal-calendar//tests//EN
-BEGIN:VEVENT
-UID:dentist@personal-calendar
-DTSTAMP:20261001T090000Z
-DTSTART:20261014T090000Z
-DTEND:20261014T100000Z
-SUMMARY:Dentist
-END:VEVENT
-END:VCALENDAR
-"""
-
-SAMPLE_CALENDAR_FILES = {
-    "collection-root/owner/calendar/.Radicale.props": '{"tag": "VCALENDAR"}',
-    "collection-root/owner/calendar/dentist.ics": DENTIST,
-}
-
-
-@pytest.fixture
-def calendar(tmp_path: Path) -> Path:
-    """A Calendar with one event, as Radicale's collections folder holds it."""
-    root = tmp_path / "collections"
-    events = root / "collection-root" / "owner" / "calendar"
-    events.mkdir(parents=True)
-    (events / ".Radicale.props").write_text('{"tag": "VCALENDAR"}')
-    (events / "dentist.ics").write_text(DENTIST)
-    return root
-
-
-@pytest.fixture
-def keypair(tmp_path: Path) -> tuple[str, Path]:
-    """An age keypair made for this test: (public key, private key file)."""
-    identity = tmp_path / "backup-key.txt"
-    subprocess.run(["age-keygen", "-o", str(identity)], check=True, capture_output=True)
-    result = subprocess.run(
-        ["age-keygen", "-y", str(identity)], check=True, capture_output=True, text=True
-    )
-    return result.stdout.strip(), identity
+from conftest import DENTIST, SAMPLE_CALENDAR_FILES, files_in
 
 
 def run(*args: str | Path) -> subprocess.CompletedProcess[str]:
@@ -85,14 +47,6 @@ def take_backup(calendar: Path, public_key: str, tmp_path: Path) -> Path:
     result = run("backup", calendar, backups, "--recipient", public_key)
     assert result.returncode == 0, result.stderr
     return Path(result.stdout.strip())
-
-
-def files_in(folder: Path) -> dict[str, str]:
-    return {
-        str(path.relative_to(folder)): path.read_text()
-        for path in folder.rglob("*")
-        if path.is_file()
-    }
 
 
 def test_restore_gives_back_exactly_the_same_calendar(
