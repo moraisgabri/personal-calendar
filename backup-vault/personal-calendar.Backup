@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# The qrexec service, in the vault qube, that receives a Backup from
+# calendar-server. dom0's policy (30-calendar-backup.policy) lets only
+# calendar-server call it, and only it.
+#
+# The Backup arrives on stdin. The service argument ($1) is the Backup's name,
+# e.g. calendar-20261005T120000Z.age; anything else is refused. It is stored
+# in /home/user/backups, keeping the newest Backups (see backup.py receive).
+#
+# Installed by install.sh as /usr/local/etc/qubes-rpc/personal-calendar.Backup.
+# /usr/local survives a restart of a Qubes AppVM; the rest of / does not.
+# VAULT_BACKUPS and BACKUP_PROGRAM are only set by the tests.
+#
+# qrexec hands only stdout back to calendar-server, so errors go there too:
+# that way a refusal's reason reaches calendar-server's failure warning.
+
+exec python3 "${BACKUP_PROGRAM:-/usr/local/lib/personal-calendar/backup.py}" \
+  receive "${VAULT_BACKUPS:-/home/user/backups}" "${1:-}" 2>&1
